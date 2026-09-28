@@ -97,6 +97,8 @@ interface Worker {
   screenDirty: boolean;
   lastLines: string[];
   leftNeedsInputAt: number;
+  /** Distinguishes a real question or permission event from legacy terminal status guesses. */
+  needsInputConfirmed: boolean;
   keyframeAt: number;
   hookToken: string;
   /** Claude never reported SessionStart: it's stuck on a trust/login/onboarding screen. */
@@ -1176,7 +1178,10 @@ export class WorkerManager {
     if (w.info.status === status) return;
     if (w.info.status === 'needs_input') w.leftNeedsInputAt = Date.now();
     w.info.status = status;
-    if (status !== 'needs_input') w.info.needsInputReason = undefined;
+    if (status !== 'needs_input') {
+      w.info.needsInputReason = undefined;
+      w.needsInputConfirmed = false;
+    }
     // Done, idle or asleep: it's not acting anything out any more.
     if (status !== 'working' && status !== 'needs_input') w.info.action = undefined;
     // Nobody is looking at the terminal right now -> raise the flag (the worker jumps). A worker at the
@@ -1193,6 +1198,7 @@ export class WorkerManager {
   private setNeedsInput(w: Worker, reason: 'question' | 'permission') {
     const alreadyNeedsInput = w.info.status === 'needs_input';
     w.info.needsInputReason = reason;
+    w.needsInputConfirmed = true;
     this.setStatus(w, 'needs_input');
     if (alreadyNeedsInput) {
       this.emitUpdate(w);
@@ -1355,7 +1361,7 @@ process.stdin.on('end', () => {
   }
 
   private persist() {
-    const saved = [...this.workers.values()].map(({ info, tracker, codexTranscript, hookToken, pty, bootBlocked, interrupted }) => ({
+    const saved = [...this.workers.values()].map(({ info, tracker, codexTranscript, hookToken, pty, bootBlocked, interrupted, needsInputConfirmed }) => ({
       id: info.id,
       kind: info.kind,
       provider: info.provider,
@@ -1372,6 +1378,7 @@ process.stdin.on('end', () => {
       sessionId: info.sessionId,
       activity: info.activity,
       needsInputReason: info.needsInputReason,
+      needsInputConfirmed,
       task: info.task,
       pr: info.pr,
       meeting: info.meeting,
@@ -1395,7 +1402,7 @@ process.stdin.on('end', () => {
   private restore() {
     if (!existsSync(this.statePath)) return;
     try {
-      const saved = JSON.parse(readFileSync(this.statePath, 'utf8')) as (Partial<WorkerInfo> & { tracker?: unknown; codexTranscript?: unknown; hookToken?: unknown; pty?: any; midTurn?: unknown; bootBlocked?: unknown })[];
+      const saved = JSON.parse(readFileSync(this.statePath, 'utf8')) as (Partial<WorkerInfo> & { tracker?: unknown; codexTranscript?: unknown; hookToken?: unknown; pty?: any; midTurn?: unknown; bootBlocked?: unknown; needsInputConfirmed?: unknown })[];
       for (const s of saved) {
         if (!s.id || !s.deskId || !DESK_BY_ID.has(s.deskId) || this.deskOccupied(s.deskId)) continue;
         const tracker = restoreTracker(s.tracker);
@@ -1409,13 +1416,11 @@ process.stdin.on('end', () => {
         const activity = s.activity ?? '';
         const confirmsInput = /^\s*Wants permission:|^\s*Asks(?: a question|:)|AskUserQuestion|request_user_input/i.test(activity);
         const legacySetupBlock = !confirmsInput && /complete login|review Office hooks|setup prompt \(trust \/ login\)|isn't signed in/i.test(activity);
-        const unconfirmedWithoutSession = s.pty?.status === 'needs_input' && !s.sessionId && !confirmsInput;
         const inferredReason = /^\s*Wants permission:/i.test(activity)
           ? 'permission'
           : confirmsInput ? 'question' : undefined;
         const savedReason = s.needsInputReason === 'question' || s.needsInputReason === 'permission' ? s.needsInputReason : undefined;
-        const legacyQuestion = s.pty?.status === 'needs_input' && !!s.sessionId && provider !== 'opencode' && !legacySetupBlock;
-        const needsInputReason = unconfirmedWithoutSession ? undefined : savedReason ?? inferredReason ?? (legacyQuestion ? 'question' : undefined);
+        const needsInputReason = inferredReason ?? (s.needsInputConfirmed === true ? savedReason : undefined);
         const info: WorkerInfo = {
           id: s.id,
           kind: s.kind === 'shell' ? 'shell' : 'agent',
@@ -1445,6 +1450,7 @@ process.stdin.on('end', () => {
           meeting: typeof s.meeting === 'string' && DESK_BY_ID.get(s.deskId)?.room ? s.meeting : undefined,
         };
         const w = newWorker(info, tracker, typeof s.hookToken === 'string' && s.hookToken ? s.hookToken : undefined);
+        w.needsInputConfirmed = !!needsInputReason;
         w.bootBlocked = s.bootBlocked === true || legacySetupBlock;
         if (provider === 'codex' && typeof s.codexTranscript === 'string') w.codexTranscript = s.codexTranscript;
         w.screenDirty = false;
@@ -1479,6 +1485,7 @@ function newWorker(info: WorkerInfo, tracker: UsageTracker, hookToken = randomBy
     screenDirty: true,
     lastLines: [],
     leftNeedsInputAt: 0,
+    needsInputConfirmed: false,
     keyframeAt: 0,
     hookToken,
     codexUsage: new CodexUsageReader(),
