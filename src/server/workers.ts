@@ -1407,9 +1407,10 @@ process.stdin.on('end', () => {
               ? 'claude'
               : this.defaultProvider;
         const legacySetupBlock = !s.needsInputReason && /complete login|review Office hooks|setup prompt \(trust \/ login\)|isn't signed in/i.test(s.activity ?? '');
-        const needsInputReason = s.needsInputReason === 'question' || s.needsInputReason === 'permission'
-          ? s.needsInputReason
-          : s.pty?.status === 'needs_input' && !legacySetupBlock ? 'question' : undefined;
+        const inferredReason = /^\s*Wants permission:/i.test(s.activity ?? '')
+          ? 'permission'
+          : /Asks a question|AskUserQuestion|request_user_input/i.test(s.activity ?? '') ? 'question' : undefined;
+        const needsInputReason = s.needsInputReason === 'question' || s.needsInputReason === 'permission' ? s.needsInputReason : inferredReason;
         const info: WorkerInfo = {
           id: s.id,
           kind: s.kind === 'shell' ? 'shell' : 'agent',
@@ -1444,7 +1445,7 @@ process.stdin.on('end', () => {
         w.screenDirty = false;
         if (typeof s.pty?.id === 'string') {
           const savedStatus: WorkerStatus = RUNNING.has(s.pty.status) ? s.pty.status : 'idle';
-          const status: WorkerStatus = w.bootBlocked && savedStatus === 'needs_input' ? 'starting' : savedStatus;
+          const status: WorkerStatus = savedStatus === 'needs_input' && (w.bootBlocked || !needsInputReason) ? 'starting' : savedStatus;
           w.saved = { ptyId: s.pty.id, status, acked: s.pty.acked !== false, waitingSince: typeof s.pty.waitingSince === 'number' ? s.pty.waitingSince : undefined };
         }
         // Mid-turn as the office went down: cut off, unless its terminal is picked back up still
