@@ -1406,11 +1406,16 @@ process.stdin.on('end', () => {
             : tracker.transcript
               ? 'claude'
               : this.defaultProvider;
-        const legacySetupBlock = !s.needsInputReason && /complete login|review Office hooks|setup prompt \(trust \/ login\)|isn't signed in/i.test(s.activity ?? '');
-        const inferredReason = /^\s*Wants permission:/i.test(s.activity ?? '')
+        const activity = s.activity ?? '';
+        const confirmsInput = /^\s*Wants permission:|^\s*Asks(?: a question|:)|AskUserQuestion|request_user_input/i.test(activity);
+        const legacySetupBlock = !confirmsInput && /complete login|review Office hooks|setup prompt \(trust \/ login\)|isn't signed in/i.test(activity);
+        const unconfirmedWithoutSession = s.pty?.status === 'needs_input' && !s.sessionId && !confirmsInput;
+        const inferredReason = /^\s*Wants permission:/i.test(activity)
           ? 'permission'
-          : /Asks a question|AskUserQuestion|request_user_input/i.test(s.activity ?? '') ? 'question' : undefined;
-        const needsInputReason = s.needsInputReason === 'question' || s.needsInputReason === 'permission' ? s.needsInputReason : inferredReason;
+          : confirmsInput ? 'question' : undefined;
+        const savedReason = s.needsInputReason === 'question' || s.needsInputReason === 'permission' ? s.needsInputReason : undefined;
+        const legacyQuestion = s.pty?.status === 'needs_input' && !!s.sessionId && provider !== 'opencode' && !legacySetupBlock;
+        const needsInputReason = unconfirmedWithoutSession ? undefined : savedReason ?? inferredReason ?? (legacyQuestion ? 'question' : undefined);
         const info: WorkerInfo = {
           id: s.id,
           kind: s.kind === 'shell' ? 'shell' : 'agent',
