@@ -304,6 +304,8 @@ export class Floor {
       workers: ws.filter((w) => !DESK_BY_ID.get(w.deskId)?.station).length,
       busy: ws.filter((w) => w.status === 'working').length,
       waiting: ws.filter((w) => w.kind === 'agent' && (w.status === 'needs_input' || (w.status === 'done' && !w.acked))).length,
+      needsInput: ws.filter((w) => w.kind === 'agent' && w.status === 'needs_input').length,
+      unreadDone: ws.filter((w) => w.kind === 'agent' && w.status === 'done' && !w.acked).length,
       people: this.ctx.people(this),
     };
   }

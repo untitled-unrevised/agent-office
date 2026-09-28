@@ -5,6 +5,7 @@ import type { Net } from '../net';
 import { store } from '../state';
 import { TERM_THEME } from '../world/laptop';
 import { h, openModal, STATUS_LABEL, timeAgo, toast, type Modal } from './dom';
+import { doneForLabel } from '../../shared/status';
 import { usageLabel, usageTitle } from './usage';
 import type { ServerMsg, WorkerInfo } from '../../shared/protocol';
 import { isAsleep } from '../../shared/status';
@@ -157,7 +158,9 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   // Typing stops showing a couple of seconds after the last keystroke.
   const typingTimer = setInterval(() => {
     const w = store.workers.get(workerId);
-    if (w && typing.size) renderPresence(w);
+    if (!w) return;
+    if (typing.size) renderPresence(w);
+    pill.textContent = doneForLabel(w) ?? STATUS_LABEL[w.status] ?? w.status;
   }, 500);
   /** Tells the others here you're typing, about once a second while you are. */
   let typingSentAt = 0;
@@ -175,8 +178,8 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       return;
     }
     title.textContent = [w.kind === 'agent' ? providerLabel(w.provider, store.project) : null, w.name, w.title, w.worktree && `🌿 ${w.worktree.branch}`].filter(Boolean).join(' · ');
-    pill.className = `pill ${w.status}`;
-    pill.textContent = STATUS_LABEL[w.status] ?? w.status;
+    pill.className = `pill ${w.status}${w.status === 'done' && !w.acked ? ' unread' : ''}`;
+    pill.textContent = doneForLabel(w) ?? STATUS_LABEL[w.status] ?? w.status;
     const workerProvider = w.kind === 'agent' ? resolvedProvider(w.provider, store.project) : undefined;
     const usageState = w.kind === 'agent' ? providerUsageState(w.provider, store.project, w.usage) : undefined;
     cost.textContent = w.kind !== 'agent' ? '' : usageState === 'tracked' && w.usage ? usageLabel(w.usage, workerProvider) : workerProvider === 'opencode' && usageState === 'waiting' ? 'waiting for metrics' : workerProvider === 'codex' && usageState === 'waiting' ? 'waiting for first report' : usageState === 'untracked' ? 'usage untracked' : '';

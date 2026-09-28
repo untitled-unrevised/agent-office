@@ -23,7 +23,7 @@ export async function askNotifyPermission(): Promise<NotifyPermission> {
   return notifyPermission();
 }
 
-/** Waiting on a person: needs input, or finished its turn and nobody has looked yet. */
+/** Open question/permission, or a finished turn whose results haven't been opened yet. */
 export function waitingOnSomeone(w: WorkerInfo): w is WorkerInfo & { status: 'needs_input' | 'done' } {
   return w.status === 'needs_input' || (w.status === 'done' && !w.acked);
 }

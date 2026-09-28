@@ -20,6 +20,19 @@ export function alertDetail(w: WorkerInfo): string | undefined {
   return w.status === 'needs_input' ? (w.activity ?? w.task?.summary) : (w.task?.summary ?? w.prompt);
 }
 
+/** A quiet label for a completed turn after someone has opened its results. */
+export function doneForLabel(w: WorkerInfo, now = Date.now()): string | undefined {
+  if (w.status !== 'done' || !w.acked) return undefined;
+  const seconds = Math.max(0, Math.floor((now - (w.waitingSince ?? w.createdAt)) / 1000));
+  if (seconds < 60) return `done for ${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `done for ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `done for ${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `done for ${days}d ${hours % 24}h`;
+}
+
 /** A worker's pull request: still open, or merged (time to send it home). */
 export interface WorkerPr {
   state: 'open' | 'merged';

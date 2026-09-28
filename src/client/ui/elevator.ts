@@ -98,7 +98,8 @@ export function openElevator(opts: ElevatorOptions): void {
     if (f.cloning) stats.push('⏳ Cloning…');
     else {
       if (f.busy) stats.push(h('span', { title: 'Working' }, `👷 ${f.busy}`));
-      if (f.waiting) stats.push(h('span.waiting', { title: 'Waiting on someone' }, `🙋 ${f.waiting}`));
+      if (f.needsInput) stats.push(h('span.waiting', { title: 'Questions or permissions that need an answer' }, `🙋 ${f.needsInput}`));
+      if (f.unreadDone) stats.push(h('span', { title: 'Unread results' }, `📬 ${f.unreadDone}`));
       stats.push(h('span', { title: 'Workers at desks' }, `💻 ${f.workers}`));
       if (f.people) stats.push(h('span', { title: 'People on this floor' }, `🧑 ${f.people}`));
     }

@@ -1,5 +1,5 @@
-// The workers waiting on you on this floor, longest first: N takes you to each in turn (see main.ts),
-// arrows at the edge of the screen point to them (ui/compass.ts), and the top bar and the Workers panel count them.
+// Open questions and unread results on this floor, oldest first: N takes you to each in turn (see main.ts),
+// arrows at the edge of the screen point to them (ui/compass.ts), and the top bar and Workers panel count them.
 
 import type { WorkerInfo } from '../shared/protocol';
 import { waitingOnSomeone } from './notify';
@@ -11,16 +11,16 @@ function since(w: WorkerInfo): number {
   return w.waitingSince ?? w.createdAt;
 }
 
-/** Workers waiting on someone, whoever has waited longest first. */
+/** Questions and unread results, whoever has waited longest first. */
 export function waitingInOrder(workers: Iterable<WorkerInfo>): Waiting[] {
   return [...workers].filter(waitingOnSomeone).sort((a, b) => since(a) - since(b) || a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
-/** "2 waiting · 1 done": the ones that need input, then the ones that finished. */
+/** "2 need input · 1 done": the questions first, then unread completed turns. */
 export function waitingLabel(waiting: readonly WorkerInfo[]): string {
   const needs = waiting.filter((w) => w.status === 'needs_input').length;
   const done = waiting.length - needs;
-  return [needs && `🙋 ${needs} waiting`, done && `✅ ${done} done`].filter(Boolean).join(' · ');
+  return [needs && `🙋 ${needs} need input`, done && `✅ ${done} done`].filter(Boolean).join(' · ');
 }
 
 /**

@@ -1,5 +1,4 @@
 import { store, type HudPanel, type Settings, type Topic } from '../state';
-import { waitingOnSomeone } from '../notify';
 import { DESK_BY_ID } from '../../shared/layout';
 import { $, h, openModal, type Modal } from './dom';
 
@@ -129,9 +128,12 @@ export function mountHud(actions: HudAction[], settings: Settings, save: () => v
     const workers = [...store.workers.values()];
     // Hired onto desks, bean bags and the meeting room's table; the board agents at their kiosks don't count.
     const hired = workers.filter((w) => !DESK_BY_ID.get(w.deskId)?.station).length;
-    const waiting = workers.filter(waitingOnSomeone).length;
-    const workersTitle = hired || waiting ? `${hired} worker${hired === 1 ? '' : 's'} on this floor${waiting ? `, ${waiting} waiting on someone` : ''}` : 'No workers on this floor yet';
-    // Who's waiting has its own button on the bar (the 'waiting' action), so this just counts them.
+    const needs = workers.filter((w) => w.status === 'needs_input').length;
+    const unreadDone = workers.filter((w) => w.status === 'done' && !w.acked).length;
+    const workersTitle = hired || needs || unreadDone
+      ? `${hired} worker${hired === 1 ? '' : 's'} on this floor${needs ? `, ${needs} need${needs === 1 ? 's' : ''} input` : ''}${unreadDone ? `, ${unreadDone} unread result${unreadDone === 1 ? '' : 's'}` : ''}`
+      : 'No workers on this floor yet';
+    // Questions and unread results have their own button on the bar, so this just counts workers.
     items.push(panelChip('workers', '🤖', 'Workers', hired, workersTitle));
     // Redrawn only when it looks different, so a busy worker's updates don't swap a button out from under a click.
     const next = h('div', {}, ...items);

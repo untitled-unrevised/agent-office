@@ -89,6 +89,8 @@ export interface WorkerInfo {
   name: string;
   color: string;
   status: WorkerStatus;
+  /** Why the worker needs a response. Setup screens and startup stalls do not set this. */
+  needsInputReason?: 'question' | 'permission';
   /** True once someone opened the terminal after the last done / needs_input. */
   acked: boolean;
   /** When it last went to done or needs_input (ms), so N goes to whoever has waited longest first. */
@@ -649,8 +651,10 @@ export interface FloorInfo {
    */
   workers: number;
   busy: number;
-  /** Workers waiting on someone: a question, a permission, or a finished turn nobody looked at. */
+  /** Total questions/permissions plus completed turns whose results haven't been opened. */
   waiting: number;
+  needsInput: number;
+  unreadDone: number;
   people: number;
 }
 

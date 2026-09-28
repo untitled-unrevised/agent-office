@@ -1274,6 +1274,7 @@ export class Worker {
   private bubbleKey = '';
   /** The bubble is a task card: it hangs from its tail instead of floating. */
   private bubbleIsCard = false;
+  private doneFor?: string;
   private task: WorkerTask | undefined;
   /** Its pull request, open or merged: its bubble is outlined (and labelled, while it rests) to match. */
   private pr: WorkerPr | undefined;
@@ -1431,15 +1432,16 @@ export class Worker {
     this.root.add(this.nameTag);
   }
 
-  setStatus(status: WorkerStatus, bounce: boolean) {
+  setStatus(status: WorkerStatus, bounce: boolean, doneFor?: string) {
     this.status = status;
     this.bouncing = bounce;
+    this.doneFor = doneFor;
     if (!this.dancing) this.paintBulb();
     this.drawBubble();
   }
 
   private paintBulb() {
-    const c = STATUS_BULB[this.status] ?? '#adb5bd';
+    const c = this.status === 'done' && this.doneFor ? '#adb5bd' : STATUS_BULB[this.status] ?? '#adb5bd';
     this.bulb.color.set(c);
     this.bulb.emissive.set(c).multiplyScalar(0.7);
   }
@@ -1541,8 +1543,8 @@ export class Worker {
     // Not working on or waiting for something more: its pull request in place of ready / done / asleep.
     const prLabel = pr && status !== 'working' && status !== 'needs_input' && status !== 'starting' ? `${PR_ICON[pr.state]} PR #${pr.number} ${pr.state}` : undefined;
     const bubble =
-      prLabel ?? (status === 'needs_input' ? '❗ needs you' : status === 'done' && bounce ? '✅ done!' : status === 'working' ? '⌨️ working' : isAsleep(status) ? '💤' : '');
-    const key = `${border}|${prLabel}|${task ? `${status}|${bounce}|${task.name}|${task.summary}` : bubble}`;
+      prLabel ?? (status === 'needs_input' ? '❗ needs you' : status === 'done' && bounce ? '✅ done!' : status === 'done' && this.doneFor ? `✅ ${this.doneFor}` : status === 'working' ? '⌨️ working' : isAsleep(status) ? '💤' : '');
+    const key = `${border}|${prLabel}|${task ? `${status}|${bounce}|${this.doneFor ?? ''}|${task.name}|${task.summary}` : bubble}`;
     if (key === this.bubbleKey) return;
     this.bubbleKey = key;
     if (this.bubble) {
@@ -1552,7 +1554,11 @@ export class Worker {
     }
     this.bubbleIsCard = !!task;
     if (task) {
-      const [text, chipBg, color] = prLabel ? [prLabel.toUpperCase(), border!, '#ffffff'] : (TASK_CHIP[status] ?? TASK_CHIP.idle);
+      const [text, chipBg, color] = prLabel
+        ? [prLabel.toUpperCase(), border!, '#ffffff']
+        : status === 'done' && this.doneFor
+          ? [`✅ ${this.doneFor.toUpperCase()}`, '#dee2e6', '#495057']
+          : (TASK_CHIP[status] ?? TASK_CHIP.idle);
       this.bubble = cardSprite({ chip: { text, bg: chipBg, color }, title: task.name, body: task.summary, bg: isAsleep(status) ? '#e9ecef' : bg, border });
     } else if (bubble) this.bubble = textSprite(bubble, { bg, size: 38, border });
     if (this.bubble) this.root.add(this.bubble);

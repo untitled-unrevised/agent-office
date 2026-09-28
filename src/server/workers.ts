@@ -101,8 +101,6 @@ interface Worker {
   hookToken: string;
   /** Claude never reported SessionStart: it's stuck on a trust/login/onboarding screen. */
   bootBlocked?: boolean;
-  /** OpenCode errors keep the desk visibly actionable until a new turn starts. */
-  openCodeError?: boolean;
   codexUsage: CodexUsageReader;
   codexHome?: string;
   codexTranscript?: string;
@@ -627,7 +625,12 @@ export class WorkerManager {
         else this.emitUpdate(w);
         break;
       case 'PreToolUse':
-        if (payload?.tool_name === 'AskUserQuestion') this.setStatus(w, 'needs_input');
+        if (payload?.tool_name === 'AskUserQuestion') {
+          const questions = payload?.tool_input?.questions;
+          const question = Array.isArray(questions) ? questions.map((q: any) => q?.question).filter((q: unknown): q is string => typeof q === 'string').join(' · ') : '';
+          w.info.activity = truncate(question || 'Asks a question', 80);
+          this.setNeedsInput(w, 'question');
+        }
         else {
           w.info.activity = describeTool(payload);
           w.info.action = toolAction(payload?.tool_name, payload?.tool_input);
@@ -646,11 +649,11 @@ export class WorkerManager {
         break;
       case 'PermissionRequest':
         w.info.activity = `Wants permission: ${describeTool(payload)}`;
-        this.setStatus(w, 'needs_input');
+        this.setNeedsInput(w, 'permission');
         break;
       case 'Notification':
         if (payload?.notification_type === 'permission_prompt') {
-          if (now - w.leftNeedsInputAt > LATE_PROMPT_GRACE_MS) this.setStatus(w, 'needs_input');
+          if (now - w.leftNeedsInputAt > LATE_PROMPT_GRACE_MS) this.setNeedsInput(w, 'permission');
         } else if (payload?.notification_type === 'idle_prompt') {
           if (w.info.status === 'working') this.setStatus(w, 'done');
         }
@@ -687,7 +690,7 @@ export class WorkerManager {
       w.codexPending.clear();
       w.codexPermissionUnknown = false;
     };
-    const busy = () => this.setStatus(w, w.codexPending.size || w.codexPermissionUnknown ? 'needs_input' : 'working');
+    const busy = () => w.codexPending.size || w.codexPermissionUnknown ? this.setNeedsInput(w, 'question') : this.setStatus(w, 'working');
     switch (report.event) {
       case 'SessionStart':
         clearPending();
@@ -705,10 +708,11 @@ export class WorkerManager {
         this.setStatus(w, 'working');
         break;
       case 'PreToolUse':
-        w.info.activity = report.tool ? truncate(report.tool, 80) : 'Using a tool';
+        const asks = /(?:^|[.])(?:AskUserQuestion|request_user_input)$/.test(report.tool ?? '');
+        w.info.activity = asks ? 'Asks a question' : report.tool ? truncate(report.tool, 80) : 'Using a tool';
         w.info.action = toolAction(report.tool);
         if (report.toolUseId && w.codexTools.size < 256) w.codexTools.set(report.toolUseId, report.tool ?? '');
-        if (/(?:^|[.])(?:AskUserQuestion|request_user_input)$/.test(report.tool ?? '')) {
+        if (asks) {
           if (report.toolUseId) w.codexPending.add(report.toolUseId);
           else w.codexPermissionUnknown = true;
         }
@@ -721,7 +725,7 @@ export class WorkerManager {
         const candidates = [...w.codexTools].filter(([, tool]) => tool === report.tool);
         if (!candidates.length) w.codexPermissionUnknown = true;
         for (const [id] of candidates) w.codexPending.add(id);
-        this.setStatus(w, 'needs_input');
+        this.setNeedsInput(w, 'permission');
         break;
       case 'PostToolUse':
         if (report.toolUseId) {
@@ -766,11 +770,8 @@ export class WorkerManager {
         w.info.activity = undefined;
         this.setStatus(w, 'idle');
       }
-      w.openCodeError = false;
       this.persist();
     }
-    if (payload.type === 'error') w.openCodeError = true;
-    else if (payload.status === 'working' || payload.prompt) w.openCodeError = false;
     if (payload.prompt) {
       w.info.activity = truncate(payload.prompt, 80);
       w.info.action = undefined;
@@ -779,11 +780,17 @@ export class WorkerManager {
       w.info.activity = truncate(payload.tool, 80);
       w.info.action = toolAction(payload.tool);
     } else if (payload.detail) {
-      w.info.activity = truncate(payload.detail, 80);
+      const detail = truncate(payload.detail, 80);
+      w.info.activity = payload.type === 'question' ? `Asks: ${detail}` : payload.type === 'permission' ? `Wants permission: ${detail}` : detail;
     }
-    if (payload.status === 'needs_input') this.setStatus(w, 'needs_input');
+    if (payload.status === 'needs_input' && (payload.type === 'question' || payload.type === 'permission')) this.setNeedsInput(w, payload.type);
+    else if (payload.status === 'needs_input' && w.info.needsInputReason) this.setNeedsInput(w, w.info.needsInputReason);
+    else if (payload.status === 'needs_input') this.setStatus(w, 'working');
     else if (payload.status === 'working') this.setStatus(w, 'working');
-    else if (payload.status === 'done' && w.pty) this.setStatus(w, w.openCodeError ? 'needs_input' : 'done');
+    else if (payload.status === 'done' && w.pty) {
+      if (payload.type === 'error' && w.info.needsInputReason) this.setNeedsInput(w, w.info.needsInputReason);
+      else this.setStatus(w, 'done');
+    }
     else if (payload.status === 'starting' && w.info.status === 'starting') this.setStatus(w, 'idle');
     else this.emitUpdate(w);
     return true;
@@ -933,7 +940,6 @@ export class WorkerManager {
     }
     if (isOpenCode || isCodex) {
       w.hookToken = randomBytes(16).toString('hex');
-      w.openCodeError = false;
     }
     const env = childEnv();
     Object.assign(env, {
@@ -1085,8 +1091,8 @@ export class WorkerManager {
       this.emitUpdate(w);
       this.persist();
     });
-    // SessionStart fires as soon as Claude can take input. Still silent after a while means it is
-    // blocked on a human: folder trust dialog, login, first-run onboarding. Flag it so it jumps.
+    // SessionStart fires as soon as Claude can take input. Silence can mean trust/login setup, which
+    // is useful context but isn't a question about the work and shouldn't page the user as "needs you".
     setTimeout(() => {
       if (info.status !== 'starting' || w.pty !== proc) return;
       if (isClaude || isCodex) {
@@ -1094,7 +1100,8 @@ export class WorkerManager {
         info.activity = isCodex
           ? 'Open the terminal: complete login and review Office hooks in /hooks'
           : 'Waiting on a setup prompt (trust / login) — open the terminal';
-        this.setStatus(w, 'needs_input');
+        this.emitUpdate(w);
+        this.persist();
       } else this.setStatus(w, 'idle');
     }, 12000);
   }
@@ -1169,6 +1176,7 @@ export class WorkerManager {
     if (w.info.status === status) return;
     if (w.info.status === 'needs_input') w.leftNeedsInputAt = Date.now();
     w.info.status = status;
+    if (status !== 'needs_input') w.info.needsInputReason = undefined;
     // Done, idle or asleep: it's not acting anything out any more.
     if (status !== 'working' && status !== 'needs_input') w.info.action = undefined;
     // Nobody is looking at the terminal right now -> raise the flag (the worker jumps). A worker at the
@@ -1180,6 +1188,16 @@ export class WorkerManager {
     this.emitUpdate(w);
     // What a restarted office picks the worker back up as, should its terminal outlive this one.
     if (w.pty?.id) this.persist();
+  }
+
+  private setNeedsInput(w: Worker, reason: 'question' | 'permission') {
+    const alreadyNeedsInput = w.info.status === 'needs_input';
+    w.info.needsInputReason = reason;
+    this.setStatus(w, 'needs_input');
+    if (alreadyNeedsInput) {
+      this.emitUpdate(w);
+      if (w.pty?.id) this.persist();
+    }
   }
 
   private syncViewers(w: Worker): boolean {
@@ -1227,26 +1245,38 @@ export class WorkerManager {
 
   /**
    * Claude can sit at its prompt without being usable: stuck on a first-run screen, or not signed
-   * in on this machine. Flag that as needing a human, and clear it once the screen moves on.
+   * in on this machine. Keep the setup detail visible without treating it as a question about the work.
    */
   private checkBlocked(w: Worker) {
     if (w.info.kind !== 'agent' || !w.term || (w.info.provider !== 'claude' && w.info.provider !== 'custom')) return;
-    const s = w.info.status;
-    if (s !== 'starting' && s !== 'idle' && !(w.bootBlocked && s === 'needs_input')) return;
+    let s = w.info.status;
+    if (s === 'needs_input' && w.bootBlocked) {
+      this.setStatus(w, 'starting');
+      s = 'starting';
+    }
+    if (s !== 'starting' && s !== 'idle') return;
     // Only this run's output counts: a "Not logged in" in the scrollback from before is old news.
     const text = screenText(w.term, w.term.buffer.active.type === 'normal' ? Math.max(0, w.fresh?.line ?? 0) : 0);
     const loggedOut = NOT_LOGGED_IN.test(text);
     const blocked = loggedOut || (SETUP_PROMPT.test(text) && (s === 'starting' || w.bootBlocked));
-    if (blocked && s !== 'needs_input') {
+    if (blocked && !w.bootBlocked) {
       w.bootBlocked = true;
       w.info.activity = loggedOut
         ? "Claude isn't signed in on this machine — open the terminal and type /login"
         : 'Waiting on a setup prompt (trust / login) — open the terminal';
-      this.setStatus(w, 'needs_input');
-    } else if (!blocked && w.bootBlocked && s === 'needs_input') {
+      if (s === 'idle') this.setStatus(w, 'starting');
+      else {
+        this.emitUpdate(w);
+        this.persist();
+      }
+    } else if (!blocked && w.bootBlocked) {
       w.bootBlocked = false;
       w.info.activity = undefined;
-      this.setStatus(w, 'idle');
+      if (s !== 'idle') this.setStatus(w, 'idle');
+      else {
+        this.emitUpdate(w);
+        this.persist();
+      }
     }
   }
 
@@ -1341,6 +1371,7 @@ process.stdin.on('end', () => {
       title: info.title,
       sessionId: info.sessionId,
       activity: info.activity,
+      needsInputReason: info.needsInputReason,
       task: info.task,
       pr: info.pr,
       meeting: info.meeting,
@@ -1349,6 +1380,7 @@ process.stdin.on('end', () => {
       codexTranscript: info.provider === 'codex' ? codexTranscript : undefined,
       // A terminal still running in the host, to pick back up after a restart. Its hooks keep the token.
       hookToken,
+      bootBlocked,
       pty: pty?.id ? { id: pty.id, status: info.status, acked: info.acked, waitingSince: info.waitingSince } : undefined,
       // In the middle of something: if its terminal doesn't make it through a restart, it carries on after.
       midTurn: !this.stopping && (!!interrupted || midTurn({ info, bootBlocked })),
@@ -1363,7 +1395,7 @@ process.stdin.on('end', () => {
   private restore() {
     if (!existsSync(this.statePath)) return;
     try {
-      const saved = JSON.parse(readFileSync(this.statePath, 'utf8')) as (Partial<WorkerInfo> & { tracker?: unknown; codexTranscript?: unknown; hookToken?: unknown; pty?: any; midTurn?: unknown })[];
+      const saved = JSON.parse(readFileSync(this.statePath, 'utf8')) as (Partial<WorkerInfo> & { tracker?: unknown; codexTranscript?: unknown; hookToken?: unknown; pty?: any; midTurn?: unknown; bootBlocked?: unknown })[];
       for (const s of saved) {
         if (!s.id || !s.deskId || !DESK_BY_ID.has(s.deskId) || this.deskOccupied(s.deskId)) continue;
         const tracker = restoreTracker(s.tracker);
@@ -1374,6 +1406,10 @@ process.stdin.on('end', () => {
             : tracker.transcript
               ? 'claude'
               : this.defaultProvider;
+        const legacySetupBlock = !s.needsInputReason && /complete login|review Office hooks|setup prompt \(trust \/ login\)|isn't signed in/i.test(s.activity ?? '');
+        const needsInputReason = s.needsInputReason === 'question' || s.needsInputReason === 'permission'
+          ? s.needsInputReason
+          : s.pty?.status === 'needs_input' && !legacySetupBlock ? 'question' : undefined;
         const info: WorkerInfo = {
           id: s.id,
           kind: s.kind === 'shell' ? 'shell' : 'agent',
@@ -1392,6 +1428,7 @@ process.stdin.on('end', () => {
           title: s.title,
           sessionId: s.sessionId,
           activity: s.activity,
+          needsInputReason,
           task: validTask(s.task),
           pr: s.pr && typeof s.pr.number === 'number' && typeof s.pr.url === 'string' ? { number: s.pr.number, url: s.pr.url } : undefined,
           usage: provider === 'opencode' || provider === 'codex' ? reportedUsage(s.usage) : (provider === 'claude' || provider === 'custom') && tracker.transcript ? trackerUsage(tracker) : undefined,
@@ -1402,10 +1439,12 @@ process.stdin.on('end', () => {
           meeting: typeof s.meeting === 'string' && DESK_BY_ID.get(s.deskId)?.room ? s.meeting : undefined,
         };
         const w = newWorker(info, tracker, typeof s.hookToken === 'string' && s.hookToken ? s.hookToken : undefined);
+        w.bootBlocked = s.bootBlocked === true || legacySetupBlock;
         if (provider === 'codex' && typeof s.codexTranscript === 'string') w.codexTranscript = s.codexTranscript;
         w.screenDirty = false;
         if (typeof s.pty?.id === 'string') {
-          const status: WorkerStatus = RUNNING.has(s.pty.status) ? s.pty.status : 'idle';
+          const savedStatus: WorkerStatus = RUNNING.has(s.pty.status) ? s.pty.status : 'idle';
+          const status: WorkerStatus = w.bootBlocked && savedStatus === 'needs_input' ? 'starting' : savedStatus;
           w.saved = { ptyId: s.pty.id, status, acked: s.pty.acked !== false, waitingSince: typeof s.pty.waitingSince === 'number' ? s.pty.waitingSince : undefined };
         }
         // Mid-turn as the office went down: cut off, unless its terminal is picked back up still

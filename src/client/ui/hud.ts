@@ -8,6 +8,7 @@ import { usageLabel, usageTitle } from './usage';
 import { providerLabel, providerUsageState, resolvedProvider, modelBadge } from './provider';
 import { whereabouts } from './whereabouts';
 import { DESK_BY_ID } from '../../shared/layout';
+import { doneForLabel } from '../../shared/status';
 
 /** What the people list last showed, so it's only drawn again when something in it changed. */
 let peopleKey = '';
@@ -74,7 +75,7 @@ export function renderWorkers(onOpen: (id: string) => void) {
         h('span.dot', { style: `background:${w.color}` }),
         h('span.name', {}, w.name, sub ? h('span.sub', {}, sub) : null,
           usageState === 'tracked' && w.usage ? h('span.cost', { title: usageTitle(w.usage, providerKind) }, usageLabel(w.usage, providerKind)) : null),
-        h('span.pill', { class: w.status }, STATUS_LABEL[w.status] ?? w.status),
+        h('span.pill', { class: `${w.status}${w.status === 'done' && !w.acked ? ' unread' : ''}`, 'data-worker-id': w.id }, doneForLabel(w) ?? STATUS_LABEL[w.status] ?? w.status),
       ),
     );
   }
@@ -84,6 +85,14 @@ export function renderWorkers(onOpen: (id: string) => void) {
   const hired = workers.filter((w) => !DESK_BY_ID.get(w.deskId)?.station).length;
   $('worker-count').textContent = hired ? String(hired) : '';
 }
+
+// A completed result ages quietly after it has been opened.
+setInterval(() => {
+  for (const pill of document.querySelectorAll<HTMLElement>('#workers .pill[data-worker-id]')) {
+    const w = store.workers.get(pill.dataset.workerId!);
+    if (w) pill.textContent = doneForLabel(w) ?? STATUS_LABEL[w.status] ?? w.status;
+  }
+}, 15_000);
 
 let caffeineKey = '';
 /** The caffeine meter: a cup per coffee in a row, and a bar that drains over the buzz's minute. */
@@ -142,7 +151,7 @@ export function openHelp() {
     ['📝', 'The whiteboard on wheels between the desks and the lounge: press E to draw on it with everyone on your floor, live. What you draw stays up on the board'],
     ['🕹️', 'The arcade cabinet in the lounge plays BLOCKFALL: arrows (or WASD) move and turn, Space drops, C holds, P pauses. Everyone on the floor sees your game on it, and E there watches whoever is playing. One of your workers needing input pauses it'],
     ['🎉', 'Whenever a pull request merges, the gong next to the PR board rings, confetti rains down all over the floor and every worker gets up on its desk for a quick dance. Walk up to the gong and press E to bang it yourself'],
-    ['N', "Next worker that needs you: go to whoever has waited longest (needs input, or done and nobody's looked), and again for the next one. Arrows at the edge of the screen point to the ones out of sight"],
+    ['N', "Next question or unread result: go to the oldest one, then press N again for the next. Arrows at the edge of the screen point to ones out of sight"],
     ['🏀', 'The hoop on the west wall, by the exit door: E at the ball picks it up. Hold E (or the mouse, in first person) and let go when the meter is in the green to sink it. In first person it goes where you look. Q drops it. Everyone on your floor sees your shot'],
     ['🍸', 'The elevator goes up to the rooftop bar: a DJ playing drum and bass under the lights, and the city all around. Press E at the bar for a drink (it goes to your head for a bit) and at the DJ booth for the air horn'],
     ['Drag / wheel', 'Orbit and zoom the camera in third person'],

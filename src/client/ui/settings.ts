@@ -199,7 +199,7 @@ export function openSettings(net: Net, settings: Settings, onChange: (s: Setting
         ? 'This browser can’t show notifications from the office here. They need https or localhost (an SSH tunnel counts).'
         : perm === 'denied'
           ? 'Your browser blocks notifications from the office. Allow them in the site settings (the icon left of the address), then open this again.'
-          : 'When a worker needs input or finishes while you’re in another tab or app, you get a notification. Click it to jump to that worker’s terminal. The tab title counts the workers waiting on someone either way.';
+          : 'Questions and finished turns you haven’t opened yet get a notification while you’re in another tab or app. Click it to jump to the terminal. The tab title counts both across floors.';
   };
   paintNotify();
 

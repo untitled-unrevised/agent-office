@@ -40,7 +40,8 @@ export function toggleFloorMenu(anchor: HTMLElement, opts: FloorMenuOptions): vo
     const stats: HTMLElement[] = [];
     if (f.cloning) stats.push(h('span', {}, '⏳ Cloning…'));
     else {
-      if (f.waiting) stats.push(h('span.waiting', { title: 'Workers waiting on someone' }, `🙋 ${f.waiting}`));
+      if (f.needsInput) stats.push(h('span.waiting', { title: 'Questions or permissions that need an answer' }, `🙋 ${f.needsInput}`));
+      if (f.unreadDone) stats.push(h('span', { title: 'Unread results' }, `📬 ${f.unreadDone}`));
       if (f.busy) stats.push(h('span', { title: 'Working' }, `👷 ${f.busy}`));
       stats.push(h('span', { title: 'Workers at desks' }, `💻 ${f.workers}`));
       if (f.people) stats.push(h('span', { title: 'People on this floor' }, `🧑 ${f.people}`));

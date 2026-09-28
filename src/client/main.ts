@@ -70,6 +70,7 @@ import { openBookshelf } from './ui/bookshelf';
 import { Arcade } from './ui/arcade';
 import { Cabinet } from './ui/cabinet';
 import { trackTitle } from '../shared/jukebox';
+import { doneForLabel } from '../shared/status';
 import { GAME, scoreText } from '../shared/cabinet';
 import { EMOTES, EMOTE_BY_ID, EmoteBucket, type EmoteId } from '../shared/emotes';
 import { EmoteWheel } from './ui/emotes';
@@ -767,7 +768,7 @@ function renderProject() {
 store.on('floors', renderProject);
 store.on('project', renderProject);
 
-/** The tab title counts the workers waiting on someone, on every floor, so you can see them from another tab. */
+/** The tab title counts open questions and unread results across floors. */
 function renderTitle() {
   const name = store.project?.name;
   const elsewhere = store.floors.reduce((n, f) => n + (f.id === store.floor ? 0 : f.waiting), 0);
@@ -967,25 +968,28 @@ function arrive() {
   }, 450);
 }
 
-/** Workers waiting on someone, per floor, the last time the elevator said so. */
-const waitingOn = new Map<string, number>();
-/** Someone's waiting on another floor: say so, since you can't see or hear it from here. */
+/** Open questions and unread results per floor, the last time the elevator said so. */
+const waitingOn = new Map<string, { needsInput: number; unreadDone: number }>();
+/** A question or result arrived on another floor, where you can't see it. */
 function noticeWaiting() {
   let elsewhere = 0;
   for (const f of store.floors) {
     const before = waitingOn.get(f.id);
-    waitingOn.set(f.id, f.waiting);
+    waitingOn.set(f.id, { needsInput: f.needsInput, unreadDone: f.unreadDone });
     if (f.id === store.floor) continue;
     elsewhere += f.waiting;
-    if (before !== undefined && f.waiting > before) {
-      toast(`🙋 A worker on the ${f.name} floor is waiting on someone — take the elevator up`, 'warn');
+    if (before !== undefined && f.needsInput > before.needsInput) {
+      toast(`🙋 A worker on the ${f.name} floor has a question — take the elevator up`, 'warn');
       sound.ding('needs_input');
+    } else if (before !== undefined && f.unreadDone > before.unreadDone) {
+      toast(`✅ ${f.unreadDone - before.unreadDone} new result${f.unreadDone - before.unreadDone === 1 ? '' : 's'} on the ${f.name} floor`, 'info');
+      sound.ding('done');
     }
   }
   const badge = $('floors-waiting');
   badge.textContent = elsewhere ? String(elsewhere) : '';
   badge.classList.toggle('hidden', !elsewhere);
-  $('project').title = elsewhere ? `${elsewhere} worker${elsewhere === 1 ? '' : 's'} on other floors waiting on someone — click to go there` : 'Floors: go to another project';
+  $('project').title = elsewhere ? `${elsewhere} pending worker update${elsewhere === 1 ? '' : 's'} on other floors (questions or unread results) — click to go there` : 'Floors: go to another project';
 }
 
 // ---- Peers --------------------------------------------------------------------------------------
@@ -1163,7 +1167,7 @@ function syncWorkers() {
       }
       v.status = w.status;
       v.acked = w.acked;
-      v.model.setStatus(w.status, waitingOnSomeone(w));
+      v.model.setStatus(w.status, waitingOnSomeone(w), doneForLabel(w));
       noOutline(v.model.root);
     }
     v.model.setAction(w.action);
@@ -1235,6 +1239,12 @@ function arrangeSeats() {
   for (const c of appeared) if (p.y > -0.1 && p.y < c.top && p.x > c.minX - 0.3 && p.x < c.maxX + 0.3 && p.z > c.minZ - 0.3 && p.z < c.maxZ + 0.3) p.y = c.top;
 }
 store.on('workers', syncWorkers);
+setInterval(() => {
+  for (const [id, view] of workerViews) {
+    const w = store.workers.get(id);
+    if (w) view.model.setStatus(w.status, waitingOnSomeone(w), doneForLabel(w));
+  }
+}, 15_000);
 // A worker at the meeting table shows its role and round over its head (see meetingCard).
 store.on('meeting', syncWorkers);
 // A worker's bubble shows whether it has a pull request open (green) or merged (purple: send it home).
@@ -1476,7 +1486,7 @@ const compass = new Compass($('compass'));
 /** What the last press of N said, which the next press replaces. */
 let nextToast: HTMLElement | null = null;
 
-/** N: to the worker that has waited longest on someone, and on each press after, the next. */
+/** N: to the oldest question or unread result, and on each press after, the next. */
 function goToNextWaiting() {
   if (trip) return;
   const w = nextUp.next(store.workers.values(), waitingBeside());
@@ -1484,7 +1494,8 @@ function goToNextWaiting() {
   nextToast?.remove();
   if (!w || !desk) {
     const other = store.floors.find((f) => f.id !== store.floor && f.waiting > 0);
-    nextToast = toast(other ? `🛗 Nobody's waiting on this floor. ${other.waiting} on the ${other.name} floor: take the elevator` : '👍 Nobody is waiting on you');
+    const what = other ? [other.needsInput && `${other.needsInput} question${other.needsInput === 1 ? '' : 's'}`, other.unreadDone && `${other.unreadDone} unread result${other.unreadDone === 1 ? '' : 's'}`].filter(Boolean).join(' and ') : '';
+    nextToast = toast(other ? `🛗 Nothing here. ${what} on the ${other.name} floor: take the elevator` : '👍 No open questions or unread results');
     return;
   }
   closeAllModals();
@@ -3110,11 +3121,11 @@ const hud = mountHud(
       title: () => (store.upgrade.latest ? `New version: ${store.upgrade.latest.subject}` : 'Upgrade the office'),
       run: () => openUpgrade(net),
     },
-    // Up on the top bar while workers wait on someone (N does the same), next to the Workers button.
+    // Up on the top bar while questions or unread results are open (N does the same), next to Workers.
     {
       id: 'waiting',
       icon: () => (waitingNow().some((w) => w.status === 'needs_input') ? '🙋' : '✅'),
-      label: 'Next worker that needs you',
+      label: 'Next question or unread result',
       section: 'Open',
       key: 'N',
       shown: () => waitingNow().length > 0,
@@ -3122,7 +3133,7 @@ const hud = mountHud(
       chip: () => waitingLabel(waitingNow()).replace(/^(🙋|✅) /, ''),
       on: () => waitingNow().every((w) => w.status === 'done'),
       tone: () => (waitingNow().some((w) => w.status === 'needs_input') ? 'danger' : undefined),
-      title: () => 'Go to the worker that has waited longest on someone (N)',
+      title: () => 'Go to the oldest open question or unread result (N)',
       run: goToNextWaiting,
     },
   ],
